@@ -240,7 +240,42 @@ render_k3d_vm_config() {
     -e 's/^([[:space:]]*- port: )([0-9]+:[0-9]+)/\1127.0.0.1:\2/' \
     -e "s#^([[:space:]]*- )http://host\\.k3d\\.internal:10082#\\1http://${node_host}:10082#"
 }
+# inject_artifactory_k3d_registries <k3d-config-file> <source1|artifactory1:auth1> [...]
+# Appends source-registry mirror mappings + Artifactory auth into the containerd
+# registries config embedded in the k3d config file.
+# Format: "docker.io|nn-docker-remote.artifactory.insim.biz:base64auth"
+# The source registry (docker.io / ghcr.io / quay.io) is what containerd rewrites;
+# the Artifactory URL is the endpoint it forwards to.
+inject_artifactory_k3d_registries() {
+  local file="$1"; shift
+  [[ $# -gt 0 ]] || return 0
+  log "Injecting $# Artifactory k3d registry mirror(s)"
 
+  local mirrors_block="" configs_block=""
+
+  for triplet in "$@"; do
+    local source="${triplet%%|*}" rest="${triplet#*|}"
+    local artifactory="${rest%%:*}" auth="${rest#*:}"
+    [[ -z "$source" || -z "$artifactory" || -z "$auth" ]] && \
+      { log "WARNING: invalid format '$triplet' (expected source|artifactory:auth)"; continue; }
+    local decoded username password
+    decoded="$(printf '%s' "$auth" | base64 -d 2>/dev/null)" \
+      || { log "WARNING: could not decode auth for $artifactory (not valid base64)"; continue; }
+    username="${decoded%%:*}"
+    password="${decoded#*:}"
+    # Map the SOURCE registry (docker.io/ghcr.io/quay.io) to the Artifactory endpoint.
+    mirrors_block+="      \"${source}\":\n        endpoint:\n          - https://${artifactory}\n"
+    configs_block+="      \"${artifactory}\":\n        auth:\n          username: ${username}\n          password: ${password}\n"
+    log "  ${source} -> ${artifactory}"
+  done
+
+  # Append mirrors then configs to the registries.config literal block.
+  printf '%b' "${mirrors_block}" >>"$file"
+  if [[ -n "$configs_block" ]]; then
+    printf '    configs:\n' >>"$file"
+    printf '%b' "${configs_block}" >>"$file"
+  fi
+}
 # render_coredns_vm_config <node_host>
 # Prints a `coredns-custom` ConfigMap that rewrites the in-cluster *.localhost /
 # host.k3d.internal names to the k3d server node (<node_host>, e.g.

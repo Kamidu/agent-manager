@@ -75,6 +75,16 @@ ACME_EMAIL=ops@mycompany.com       # ACME contact (recommended)
 # --- Optional ---
 EXTERNAL_GATEWAYS=true             # expose the cp endpoint for external data-plane gateways
 
+# --- Optional: Artifactory mirror registries (air-gapped installs) ---
+# Set these when the VM cannot reach docker.io / ghcr.io / quay.io directly.
+# Each requires the base64-encoded auth from your Artifactory config.json.
+# ARTIFACTORY_DOCKER_REGISTRY=nn-docker-remote.artifactory.insim.biz
+# ARTIFACTORY_DOCKER_AUTH=bTY1aDQ5MDpjbVZtZEd0dU9qQXhPakU0TVRVeU1UUTRPREE2V1dSQ2EyMVFUamR1VmtaaFdqZFhlV3R1U0RscGVFTlRlbVo1
+# ARTIFACTORY_GHCR_REGISTRY=nn-ghcr-remote.artifactory.insim.biz
+# ARTIFACTORY_GHCR_AUTH=bTY1aDQ5MDpjbVZtZEd0dU9qQXhPakU0TVRVeU1UWXdNalk2U0RZME1ERk1WMEpzTTFGeGEweHRaM2N4ZFhkSE5FdG9SVW94
+# ARTIFACTORY_QUAY_REGISTRY=quay-io.artifactory.insim.biz
+# ARTIFACTORY_QUAY_AUTH=bTY1aDQ5MDpjbVZtZEd0dU9qQXhPakU0TVRVeU1UWXdNalk2U0RZME1ERk1WMEpzTTFGeGEweHRaM2N4ZFhkSE5FdG9SVW94
+
 # --- Optional per-service host overrides (default: <svc>.<DOMAIN_BASE>) ---
 # HOST_CONSOLE=console.amp.mycompany.com
 # HOST_API=api.amp.mycompany.com
@@ -148,8 +158,9 @@ start_caddy_advanced() {
   fi
 
   docker rm -f amp-caddy >/dev/null 2>&1 || true
+  local caddy_image="${ARTIFACTORY_DOCKER_REGISTRY:+${ARTIFACTORY_DOCKER_REGISTRY}/}caddy:2"
   docker run -d --name amp-caddy --restart unless-stopped --network host \
-    "${mounts[@]}" caddy:2
+    "${mounts[@]}" "$caddy_image"
   verify_caddy_up
 }
 
@@ -196,6 +207,19 @@ run_advanced_install() {
 
   log "Phase 1/2: bootstrap (Docker + tools + firewall)"
   ensure_prerequisites
+  # Configure Artifactory as Docker registry mirrors before any image pulls.
+  local -a docker_mirrors=()
+  [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" && -n "${ARTIFACTORY_DOCKER_AUTH:-}" ]] && \
+    docker_mirrors+=("${ARTIFACTORY_DOCKER_REGISTRY}:${ARTIFACTORY_DOCKER_AUTH}")
+  [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" && -n "${ARTIFACTORY_GHCR_AUTH:-}" ]] && \
+    docker_mirrors+=("${ARTIFACTORY_GHCR_REGISTRY}:${ARTIFACTORY_GHCR_AUTH}")
+  [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" && -n "${ARTIFACTORY_QUAY_AUTH:-}" ]] && \
+    docker_mirrors+=("${ARTIFACTORY_QUAY_REGISTRY}:${ARTIFACTORY_QUAY_AUTH}")
+  if (( ${#docker_mirrors[@]} )); then
+    configure_docker_mirrors "${docker_mirrors[@]}"
+    # Also log helm into each Artifactory remote for OCI chart pulls.
+    configure_helm_registries "${docker_mirrors[@]}"
+  fi
   ensure_inotify_limits
   if [[ "$TLS_MODE" == upstream ]]; then ensure_firewall "${UPSTREAM_LISTEN_PORT:-80}"; else ensure_firewall 443; fi
   ensure_disk
@@ -236,13 +260,59 @@ run_advanced_install() {
   export SHOW_LOCALHOST_URLS=false
 
   render_k3d_vm_config <"${QS_DIR}/k3d-config.yaml" >/tmp/k3d-config-vm.yaml
+  # Rewrite the k3s node image to pull via Artifactory instead of docker.io.
+  if [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" ]]; then
+    sed -i "s|^image: rancher/k3s:|image: ${ARTIFACTORY_DOCKER_REGISTRY}/rancher/k3s:|" \
+      /tmp/k3d-config-vm.yaml
+    log "k3d node image rewritten to ${ARTIFACTORY_DOCKER_REGISTRY}/rancher/k3s:..."
+  fi
+  # Inject Artifactory mirrors into containerd registries config when configured.
+  # Format: "source_registry|artifactory_registry:auth" so containerd rewrites
+  # docker.io / ghcr.io / quay.io pulls through the correct Artifactory remotes.
+  local -a k3d_registries=()
+  [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" && -n "${ARTIFACTORY_DOCKER_AUTH:-}" ]] && \
+    k3d_registries+=("docker.io|${ARTIFACTORY_DOCKER_REGISTRY}:${ARTIFACTORY_DOCKER_AUTH}")
+  [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" && -n "${ARTIFACTORY_GHCR_AUTH:-}" ]] && \
+    k3d_registries+=("ghcr.io|${ARTIFACTORY_GHCR_REGISTRY}:${ARTIFACTORY_GHCR_AUTH}")
+  [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" && -n "${ARTIFACTORY_QUAY_AUTH:-}" ]] && \
+    k3d_registries+=("quay.io|${ARTIFACTORY_QUAY_REGISTRY}:${ARTIFACTORY_QUAY_AUTH}")
+  if (( ${#k3d_registries[@]} )); then
+    inject_artifactory_k3d_registries /tmp/k3d-config-vm.yaml "${k3d_registries[@]}"
+  fi
   export K3D_CONFIG=/tmp/k3d-config-vm.yaml
+  # Pre-pull the k3d-tools image from Artifactory and re-tag it as the original
+  # ghcr.io URL so k3d finds it locally and never contacts ghcr.io directly.
+  if [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" ]] && command -v k3d >/dev/null 2>&1; then
+    local k3d_ver; k3d_ver="$(k3d version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [[ -n "$k3d_ver" ]]; then
+      local tools_art="${ARTIFACTORY_GHCR_REGISTRY}/k3d-io/k3d-tools:${k3d_ver}"
+      local tools_orig="ghcr.io/k3d-io/k3d-tools:${k3d_ver}"
+      log "Pre-pulling k3d-tools: ${tools_art}"
+      if docker pull "${tools_art}"; then
+        docker tag "${tools_art}" "${tools_orig}"
+        log "k3d-tools tagged locally as ${tools_orig} — k3d will use local image"
+      else
+        log "WARNING: k3d-tools pre-pull failed from Artifactory — k3d may fail to create the cluster"
+      fi
+    fi
+  fi
   render_coredns_vm_config "k3d-amp-local-server-0" >/tmp/coredns-amp-vm.yaml
   export COREDNS_FILE=/tmp/coredns-amp-vm.yaml
 
   log "Running base installer with custom-domain overrides (${TLS_MODE})"
+  # Patch the base installer's OCI chart URLs to route through Artifactory.
+  local install_script="${QS_DIR}/install.sh"
+  if [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" || -n "${ARTIFACTORY_QUAY_REGISTRY:-}" ]]; then
+    install_script="/tmp/install-patched.sh"
+    cp "${QS_DIR}/install.sh" "$install_script"
+    [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" ]] && \
+      sed -i "s|oci://ghcr.io/|oci://${ARTIFACTORY_GHCR_REGISTRY}/|g" "$install_script"
+    [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" ]] && \
+      sed -i "s|oci://quay.io/|oci://${ARTIFACTORY_QUAY_REGISTRY}/|g" "$install_script"
+    log "Patched base installer OCI chart URLs to use Artifactory"
+  fi
   local rc=0
-  ( set +e; source "${QS_DIR}/install.sh" ) || rc=$?
+  ( set +e; source "$install_script" ) || rc=$?
   [[ "$rc" -eq 0 ]] || die "Base installer exited $rc"
 
   start_caddy_advanced
@@ -289,6 +359,32 @@ if [[ "$DRY_RUN" == "true" ]]; then
       tls_san_list
       ;;
   esac
+  log "DRY RUN — k3d registries config (with Artifactory mirrors):"
+  render_k3d_vm_config <"${QS_DIR}/k3d-config.yaml" >/tmp/k3d-config-dryrun.yaml
+  local -a dry_k3d_registries=()
+  [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" && -n "${ARTIFACTORY_DOCKER_AUTH:-}" ]] && \
+    dry_k3d_registries+=("docker.io|${ARTIFACTORY_DOCKER_REGISTRY}:${ARTIFACTORY_DOCKER_AUTH}")
+  [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" && -n "${ARTIFACTORY_GHCR_AUTH:-}" ]] && \
+    dry_k3d_registries+=("ghcr.io|${ARTIFACTORY_GHCR_REGISTRY}:${ARTIFACTORY_GHCR_AUTH}")
+  [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" && -n "${ARTIFACTORY_QUAY_AUTH:-}" ]] && \
+    dry_k3d_registries+=("quay.io|${ARTIFACTORY_QUAY_REGISTRY}:${ARTIFACTORY_QUAY_AUTH}")
+  if (( ${#dry_k3d_registries[@]} )); then
+    inject_artifactory_k3d_registries /tmp/k3d-config-dryrun.yaml "${dry_k3d_registries[@]}"
+  fi
+  cat /tmp/k3d-config-dryrun.yaml
+  log "DRY RUN — Docker daemon mirrors:"
+  if [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" ]]; then
+    printf '  docker.io  → https://%s\n' "${ARTIFACTORY_DOCKER_REGISTRY}"
+  fi
+  if [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" ]]; then
+    printf '  ghcr.io    → https://%s\n' "${ARTIFACTORY_GHCR_REGISTRY}"
+  fi
+  if [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" ]]; then
+    printf '  quay.io    → https://%s\n' "${ARTIFACTORY_QUAY_REGISTRY}"
+  fi
+  if [[ -z "${ARTIFACTORY_DOCKER_REGISTRY:-}${ARTIFACTORY_GHCR_REGISTRY:-}${ARTIFACTORY_QUAY_REGISTRY:-}" ]]; then
+    printf '  (none configured — VM must reach docker.io/ghcr.io/quay.io directly)\n'
+  fi
   log "DRY RUN — DNS pre-flight (advisory):"; preflight_dns advisory
   exit 0
 fi

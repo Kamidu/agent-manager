@@ -48,6 +48,76 @@ ensure_prerequisites() {
   fi
 }
 
+# configure_docker_mirrors <reg1:auth1> [<reg2:auth2> ...]
+# Configures Docker daemon and /root/.docker/config.json for multiple Artifactory
+# remotes. Restarts the daemon so mirrors are active before any image pulls.
+configure_docker_mirrors() {
+  [[ $# -gt 0 ]] || { log "No registries configured"; return 0; }
+  log "Configuring Docker daemon mirrors for $# registry(ies)"
+
+  mkdir -p /root/.docker
+  local config_json='{"auths":{'
+  local daemon_mirrors='[]'
+  local first=true
+
+  for pair in "$@"; do
+    local registry="${pair%%:*}" auth="${pair##*:}"
+    [[ -z "$registry" || -z "$auth" ]] && { log "WARNING: invalid registry:auth pair '$pair'"; continue; }
+
+    # Add to docker config.json auths.
+    if [[ "$first" == true ]]; then
+      config_json+="\"${registry}\":{\"auth\":\"${auth}\"}"
+      first=false
+    else
+      config_json+=",\"${registry}\":{\"auth\":\"${auth}\"}"
+    fi
+
+    # Add to daemon mirror list.
+    daemon_mirrors="$(python3 -c "import json; m = json.loads('${daemon_mirrors}'); m.append('https://${registry}'); print(json.dumps(m))")"
+  done
+
+  config_json+='}}'
+  printf '%s\n' "$config_json" >/root/.docker/config.json
+  chmod 600 /root/.docker/config.json
+
+  # Merge mirrors into /etc/docker/daemon.json.
+  local daemon=/etc/docker/daemon.json
+  local current='{"registry-mirrors":'
+  current+="${daemon_mirrors}}"
+  [[ -f "$daemon" ]] && current="$(cat "$daemon")"
+  python3 - "$daemon" "$daemon_mirrors" <<'PYEOF'
+import json, sys, os
+d = json.loads(open(sys.argv[1], 'r').read() if os.path.exists(sys.argv[1]) else '{}')
+mirrors = json.loads(sys.argv[2])
+if mirrors:
+    d['registry-mirrors'] = mirrors
+with open(sys.argv[1], 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\n')
+PYEOF
+  systemctl reload-or-restart docker 2>/dev/null || true
+  local _
+  for _ in $(seq 1 10); do docker info >/dev/null 2>&1 && break; sleep 2; done
+  log "Docker mirrors configured for $# registry(ies)"
+}
+
+# configure_helm_registries <reg1:auth1> [<reg2:auth2> ...]
+# Logs helm into each Artifactory registry so OCI chart pulls are authenticated.
+configure_helm_registries() {
+  command -v helm >/dev/null 2>&1 || return 0
+  for pair in "$@"; do
+    local registry="${pair%%:*}" auth="${pair##*:}"
+    [[ -z "$registry" || -z "$auth" ]] && continue
+    local decoded username password
+    decoded="$(printf '%s' "$auth" | base64 -d 2>/dev/null)" || continue
+    username="${decoded%%:*}"
+    password="${decoded#*:}"
+    helm registry login "$registry" --username "$username" --password "$password" 2>/dev/null \
+      && log "helm: logged in to ${registry}" \
+      || log "WARNING: helm registry login failed for ${registry} (non-fatal)"
+  done
+}
+
 # ensure_firewall <port> — open the given inbound TCP port on the OS firewall.
 ensure_firewall() {
   local port="${1:?ensure_firewall requires a port}"

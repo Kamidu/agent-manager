@@ -143,7 +143,7 @@ validate_cert() {
 # Uses dig if present, else getent. Prints nothing if unresolved.
 _resolve_host() {
   if command -v dig >/dev/null 2>&1; then
-    dig +short A "$1" | grep -E '^[0-9.]+$'
+    dig +short +time=2 +tries=1 A "$1" | grep -E '^[0-9.]+$'
   else
     getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u
   fi
@@ -163,7 +163,7 @@ _local_ips() {
 # if it can't be determined. Overridable in tests.
 _public_ip() {
   local ip
-  for url in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
+  for url in https://checkip.amazonaws.com https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
     if command -v curl >/dev/null 2>&1; then
       ip="$(curl -fsS --max-time 4 "$url" 2>/dev/null)"
     elif command -v wget >/dev/null 2>&1; then
