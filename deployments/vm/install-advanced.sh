@@ -299,17 +299,29 @@ run_advanced_install() {
   render_coredns_vm_config "k3d-amp-local-server-0" >/tmp/coredns-amp-vm.yaml
   export COREDNS_FILE=/tmp/coredns-amp-vm.yaml
 
+  # If Artifactory mirrors are configured and a cluster already exists, delete it
+  # so it is recreated with the correct containerd registry mirror config.
+  # An existing cluster has no mirror config and will fail to pull images.
+  if (( ${#k3d_registries[@]} )) && k3d cluster list 2>/dev/null | grep -q "^amp-local"; then
+    log "Deleting existing cluster 'amp-local' — it was created without Artifactory registry mirrors and must be recreated."
+    k3d cluster delete amp-local || true
+    docker rm -f amp-caddy >/dev/null 2>&1 || true
+  fi
+
   log "Running base installer with custom-domain overrides (${TLS_MODE})"
   # Patch the base installer's OCI chart URLs to route through Artifactory.
   local install_script="${QS_DIR}/install.sh"
   if [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" || -n "${ARTIFACTORY_QUAY_REGISTRY:-}" ]]; then
-    install_script="/tmp/install-patched.sh"
-    cp "${QS_DIR}/install.sh" "$install_script"
+    # Copy install.sh AND any helper scripts it sources to a temp dir so relative
+    # source paths (e.g. install-helpers.sh) resolve correctly from the same dir.
+    local patch_dir; patch_dir="$(mktemp -d)"
+    cp "${QS_DIR}"/install.sh "${QS_DIR}"/install-helpers.sh "$patch_dir/" 2>/dev/null || true
+    install_script="${patch_dir}/install.sh"
     [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" ]] && \
       sed -i "s|oci://ghcr.io/|oci://${ARTIFACTORY_GHCR_REGISTRY}/|g" "$install_script"
     [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" ]] && \
       sed -i "s|oci://quay.io/|oci://${ARTIFACTORY_QUAY_REGISTRY}/|g" "$install_script"
-    log "Patched base installer OCI chart URLs to use Artifactory"
+    log "Patched base installer OCI chart URLs to use Artifactory (dir: ${patch_dir})"
   fi
   local rc=0
   ( set +e; source "$install_script" ) || rc=$?
