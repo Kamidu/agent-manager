@@ -86,6 +86,11 @@ EXTERNAL_GATEWAYS=true             # expose the cp endpoint for external data-pl
 # ARTIFACTORY_QUAY_AUTH=bTY1aDQ5MDpjbVZtZEd0dU9qQXhPakU0TVRVeU1UWXdNalk2U0RZME1ERk1WMEpzTTFGeGEweHRaM2N4ZFhkSE5FdG9SVW94
 # ARTIFACTORY_KGATEWAY_REGISTRY=kgateway.artifactory.insim.biz
 # ARTIFACTORY_KGATEWAY_AUTH=<base64 auth for cr.kgateway.dev remote>
+# --- Optional: local kgateway Helm chart files (avoids needing a cr.kgateway.dev Artifactory remote) ---
+# Download with: helm pull oci://cr.kgateway.dev/kgateway-dev/charts/kgateway-crds --version v2.2.1
+#                helm pull oci://cr.kgateway.dev/kgateway-dev/charts/kgateway --version v2.2.1
+# LOCAL_KGATEWAY_CRDS_CHART=/home/ssm-user/agent-manager/kgateway-crds-v2.2.1.tgz
+# LOCAL_KGATEWAY_CHART=/home/ssm-user/agent-manager/kgateway-v2.2.1.tgz
 
 # --- Optional per-service host overrides (default: <svc>.<DOMAIN_BASE>) ---
 # HOST_CONSOLE=console.amp.mycompany.com
@@ -329,9 +334,23 @@ run_advanced_install() {
       sed -i "s|oci://quay.io/|oci://${ARTIFACTORY_QUAY_REGISTRY}/|g" "$install_script"
     # kgateway charts live on cr.kgateway.dev — use a dedicated remote if set,
     # otherwise fall back to the docker.io remote (push the chart there manually).
-    local _kgateway_reg="${ARTIFACTORY_KGATEWAY_REGISTRY:-${ARTIFACTORY_DOCKER_REGISTRY:-}}"
-    [[ -n "${_kgateway_reg}" ]] && \
-      sed -i "s|oci://cr.kgateway.dev/|oci://${_kgateway_reg}/|g" "$install_script"
+    # If local .tgz files are provided they take precedence over any registry.
+    if [[ -n "${LOCAL_KGATEWAY_CRDS_CHART:-}" && -f "${LOCAL_KGATEWAY_CRDS_CHART}" ]]; then
+      sed -i "s|oci://cr.kgateway.dev/kgateway-dev/charts/kgateway-crds|${LOCAL_KGATEWAY_CRDS_CHART}|g" "$install_script"
+      log "kgateway-crds: using local chart ${LOCAL_KGATEWAY_CRDS_CHART}"
+    else
+      local _kgateway_reg="${ARTIFACTORY_KGATEWAY_REGISTRY:-${ARTIFACTORY_DOCKER_REGISTRY:-}}"
+      [[ -n "${_kgateway_reg}" ]] && \
+        sed -i "s|oci://cr.kgateway.dev/kgateway-dev/charts/kgateway-crds|oci://${_kgateway_reg}/kgateway-dev/charts/kgateway-crds|g" "$install_script"
+    fi
+    if [[ -n "${LOCAL_KGATEWAY_CHART:-}" && -f "${LOCAL_KGATEWAY_CHART}" ]]; then
+      sed -i "s|oci://cr.kgateway.dev/kgateway-dev/charts/kgateway |${LOCAL_KGATEWAY_CHART} |g" "$install_script"
+      log "kgateway: using local chart ${LOCAL_KGATEWAY_CHART}"
+    else
+      local _kgateway_reg="${ARTIFACTORY_KGATEWAY_REGISTRY:-${ARTIFACTORY_DOCKER_REGISTRY:-}}"
+      [[ -n "${_kgateway_reg}" ]] && \
+        sed -i "s|oci://cr.kgateway.dev/kgateway-dev/charts/kgateway |oci://${_kgateway_reg}/kgateway-dev/charts/kgateway |g" "$install_script"
+    fi
     log "Patched base installer OCI chart URLs to use Artifactory (dir: ${patch_dir})"
   fi
   local rc=0
