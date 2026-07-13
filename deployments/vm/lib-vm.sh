@@ -244,14 +244,14 @@ render_k3d_vm_config() {
 # Appends source-registry mirror mappings + Artifactory auth into the containerd
 # registries config embedded in the k3d config file.
 # Format: "docker.io|nn-docker-remote.artifactory.insim.biz:base64auth"
-# The source registry (docker.io / ghcr.io / quay.io) is what containerd rewrites;
-# the Artifactory URL is the endpoint it forwards to.
+# Values are YAML-double-quoted so passwords with colons/special chars are safe.
 inject_artifactory_k3d_registries() {
   local file="$1"; shift
   [[ $# -gt 0 ]] || return 0
   log "Injecting $# Artifactory k3d registry mirror(s)"
 
-  local mirrors_block="" configs_block=""
+  local tmp_mirrors; tmp_mirrors="$(mktemp)"
+  local tmp_configs; tmp_configs="$(mktemp)"
 
   for triplet in "$@"; do
     local source="${triplet%%|*}" rest="${triplet#*|}"
@@ -263,18 +263,32 @@ inject_artifactory_k3d_registries() {
       || { log "WARNING: could not decode auth for $artifactory (not valid base64)"; continue; }
     username="${decoded%%:*}"
     password="${decoded#*:}"
-    # Map the SOURCE registry (docker.io/ghcr.io/quay.io) to the Artifactory endpoint.
-    mirrors_block+="      \"${source}\":\n        endpoint:\n          - https://${artifactory}\n"
-    configs_block+="      \"${artifactory}\":\n        auth:\n          username: ${username}\n          password: ${password}\n"
+    # Mirror entry — map source registry to Artifactory endpoint.
+    cat >>"$tmp_mirrors" <<EOF
+      "${source}":
+        endpoint:
+          - "https://${artifactory}"
+EOF
+    # Config entry — YAML-double-quoted to handle colons in Artifactory tokens.
+    # The password may contain colons (e.g. reftkn:01:...) so must be quoted.
+    cat >>"$tmp_configs" <<EOF
+      "${artifactory}":
+        auth:
+          username: "${username}"
+          password: "${password}"
+EOF
     log "  ${source} -> ${artifactory}"
   done
 
-  # Append mirrors then configs to the registries.config literal block.
-  printf '%b' "${mirrors_block}" >>"$file"
-  if [[ -n "$configs_block" ]]; then
+  cat "$tmp_mirrors" >>"$file"
+  if [[ -s "$tmp_configs" ]]; then
     printf '    configs:\n' >>"$file"
-    printf '%b' "${configs_block}" >>"$file"
+    cat "$tmp_configs" >>"$file"
   fi
+  rm -f "$tmp_mirrors" "$tmp_configs"
+
+  log "Rendered k3d registries section:"
+  grep -A 9999 'registries:' "$file" | sed 's/^/  /' >&2 || true
 }
 # render_coredns_vm_config <node_host>
 # Prints a `coredns-custom` ConfigMap that rewrites the in-cluster *.localhost /
