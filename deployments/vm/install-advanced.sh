@@ -256,12 +256,16 @@ run_advanced_install() {
   # Bitnami deprecated docker.io images (moved to registry.bitnami.com).
   # Override the postgresql subchart to pull a concrete versioned tag through
   # Artifactory instead of the stale :latest from Docker Hub.
+  # global.security.allowInsecureImages bypasses Bitnami's registry allow-list check
+  # (which rejects any non-Bitnami registry, including Artifactory proxies).
+  # --set-string forces the tag to be treated as a string, not an int64.
   if [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" ]]; then
     AMP_HELM_ARGS+=(
-      "--set" "postgresql.global.imageRegistry=${ARTIFACTORY_DOCKER_REGISTRY}"
-      "--set" "postgresql.image.tag=16"
+      "--set"        "postgresql.global.imageRegistry=${ARTIFACTORY_DOCKER_REGISTRY}"
+      "--set-string" "postgresql.image.tag=16"
+      "--set"        "postgresql.global.security.allowInsecureImages=true"
     )
-    log "postgresql image overridden: ${ARTIFACTORY_DOCKER_REGISTRY}/bitnami/postgresql:16"
+    log "postgresql image overridden: ${ARTIFACTORY_DOCKER_REGISTRY}/bitnami/postgresql:16 (insecureImages allowed)"
   fi
   # shellcheck disable=SC2034
   mapfile -t THUNDER_HELM_ARGS < <(thunder_helm_args)
