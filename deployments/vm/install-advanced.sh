@@ -253,6 +253,16 @@ run_advanced_install() {
   # Build the override arrays install.sh honors, from the hostname-driven cores.
   # shellcheck disable=SC2034  # arrays are inherited by the subshell that sources install.sh
   mapfile -t AMP_HELM_ARGS < <(amp_helm_args)
+  # Bitnami deprecated docker.io images (moved to registry.bitnami.com).
+  # Override the postgresql subchart to pull a concrete versioned tag through
+  # Artifactory instead of the stale :latest from Docker Hub.
+  if [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" ]]; then
+    AMP_HELM_ARGS+=(
+      "--set" "postgresql.global.imageRegistry=${ARTIFACTORY_DOCKER_REGISTRY}"
+      "--set" "postgresql.image.tag=16"
+    )
+    log "postgresql image overridden: ${ARTIFACTORY_DOCKER_REGISTRY}/bitnami/postgresql:16"
+  fi
   # shellcheck disable=SC2034
   mapfile -t THUNDER_HELM_ARGS < <(thunder_helm_args)
   # shellcheck disable=SC2034
