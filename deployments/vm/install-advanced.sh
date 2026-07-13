@@ -84,6 +84,8 @@ EXTERNAL_GATEWAYS=true             # expose the cp endpoint for external data-pl
 # ARTIFACTORY_GHCR_AUTH=bTY1aDQ5MDpjbVZtZEd0dU9qQXhPakU0TVRVeU1UWXdNalk2U0RZME1ERk1WMEpzTTFGeGEweHRaM2N4ZFhkSE5FdG9SVW94
 # ARTIFACTORY_QUAY_REGISTRY=quay-io.artifactory.insim.biz
 # ARTIFACTORY_QUAY_AUTH=bTY1aDQ5MDpjbVZtZEd0dU9qQXhPakU0TVRVeU1UWXdNalk2U0RZME1ERk1WMEpzTTFGeGEweHRaM2N4ZFhkSE5FdG9SVW94
+# ARTIFACTORY_KGATEWAY_REGISTRY=kgateway.artifactory.insim.biz
+# ARTIFACTORY_KGATEWAY_AUTH=<base64 auth for cr.kgateway.dev remote>
 
 # --- Optional per-service host overrides (default: <svc>.<DOMAIN_BASE>) ---
 # HOST_CONSOLE=console.amp.mycompany.com
@@ -215,6 +217,8 @@ run_advanced_install() {
     docker_mirrors+=("${ARTIFACTORY_GHCR_REGISTRY}:${ARTIFACTORY_GHCR_AUTH}")
   [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" && -n "${ARTIFACTORY_QUAY_AUTH:-}" ]] && \
     docker_mirrors+=("${ARTIFACTORY_QUAY_REGISTRY}:${ARTIFACTORY_QUAY_AUTH}")
+  [[ -n "${ARTIFACTORY_KGATEWAY_REGISTRY:-}" && -n "${ARTIFACTORY_KGATEWAY_AUTH:-}" ]] && \
+    docker_mirrors+=("${ARTIFACTORY_KGATEWAY_REGISTRY}:${ARTIFACTORY_KGATEWAY_AUTH}")
   if (( ${#docker_mirrors[@]} )); then
     configure_docker_mirrors "${docker_mirrors[@]}"
     # Also log helm into each Artifactory remote for OCI chart pulls.
@@ -276,6 +280,8 @@ run_advanced_install() {
     k3d_registries+=("ghcr.io|${ARTIFACTORY_GHCR_REGISTRY}:${ARTIFACTORY_GHCR_AUTH}")
   [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" && -n "${ARTIFACTORY_QUAY_AUTH:-}" ]] && \
     k3d_registries+=("quay.io|${ARTIFACTORY_QUAY_REGISTRY}:${ARTIFACTORY_QUAY_AUTH}")
+  [[ -n "${ARTIFACTORY_KGATEWAY_REGISTRY:-}" && -n "${ARTIFACTORY_KGATEWAY_AUTH:-}" ]] && \
+    k3d_registries+=("cr.kgateway.dev|${ARTIFACTORY_KGATEWAY_REGISTRY}:${ARTIFACTORY_KGATEWAY_AUTH}")
   if (( ${#k3d_registries[@]} )); then
     inject_artifactory_k3d_registries /tmp/k3d-config-vm.yaml "${k3d_registries[@]}"
   fi
@@ -321,6 +327,11 @@ run_advanced_install() {
       sed -i "s|oci://ghcr.io/|oci://${ARTIFACTORY_GHCR_REGISTRY}/|g" "$install_script"
     [[ -n "${ARTIFACTORY_QUAY_REGISTRY:-}" ]] && \
       sed -i "s|oci://quay.io/|oci://${ARTIFACTORY_QUAY_REGISTRY}/|g" "$install_script"
+    # kgateway charts live on cr.kgateway.dev — use a dedicated remote if set,
+    # otherwise fall back to the docker.io remote (push the chart there manually).
+    local _kgateway_reg="${ARTIFACTORY_KGATEWAY_REGISTRY:-${ARTIFACTORY_DOCKER_REGISTRY:-}}"
+    [[ -n "${_kgateway_reg}" ]] && \
+      sed -i "s|oci://cr.kgateway.dev/|oci://${_kgateway_reg}/|g" "$install_script"
     log "Patched base installer OCI chart URLs to use Artifactory (dir: ${patch_dir})"
   fi
   local rc=0
