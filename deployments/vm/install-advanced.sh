@@ -262,10 +262,10 @@ run_advanced_install() {
   if [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" ]]; then
     AMP_HELM_ARGS+=(
       "--set"        "postgresql.global.imageRegistry=${ARTIFACTORY_DOCKER_REGISTRY}"
-      "--set-string" "postgresql.image.tag=16"
+      "--set-string" "postgresql.image.tag=18.4"
       "--set"        "postgresql.global.security.allowInsecureImages=true"
     )
-    log "postgresql image overridden: ${ARTIFACTORY_DOCKER_REGISTRY}/bitnami/postgresql:16 (insecureImages allowed)"
+    log "postgresql image overridden: ${ARTIFACTORY_DOCKER_REGISTRY}/bitnami/postgresql:18.4 (insecureImages allowed)"
   fi
   # shellcheck disable=SC2034
   mapfile -t THUNDER_HELM_ARGS < <(thunder_helm_args)
@@ -336,7 +336,7 @@ run_advanced_install() {
   log "Running base installer with custom-domain overrides (${TLS_MODE})"
   # Patch the base installer's OCI chart URLs to route through Artifactory.
   local install_script="${QS_DIR}/install.sh"
-  if [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" || -n "${ARTIFACTORY_QUAY_REGISTRY:-}" ]]; then
+  if [[ -n "${ARTIFACTORY_GHCR_REGISTRY:-}" || -n "${ARTIFACTORY_QUAY_REGISTRY:-}" || -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" ]]; then
     # Copy install.sh AND any helper scripts it sources to a temp dir so relative
     # source paths (e.g. install-helpers.sh) resolve correctly from the same dir.
     local patch_dir; patch_dir="$(mktemp -d)"
@@ -364,6 +364,15 @@ run_advanced_install() {
       local _kgateway_reg="${ARTIFACTORY_KGATEWAY_REGISTRY:-${ARTIFACTORY_DOCKER_REGISTRY:-}}"
       [[ -n "${_kgateway_reg}" ]] && \
         sed -i "s|oci://cr.kgateway.dev/kgateway-dev/charts/kgateway |oci://${_kgateway_reg}/kgateway-dev/charts/kgateway |g" "$install_script"
+    fi
+    # Override fluent-bit to pull from docker.io via Artifactory mirror.
+    # cr.fluentbit.io is blocked in air-gapped installs; docker.io/fluent/fluent-bit
+    # is the same image and is available through the ARTIFACTORY_DOCKER_REGISTRY remote.
+    if [[ -n "${ARTIFACTORY_DOCKER_REGISTRY:-}" ]]; then
+      awk -v reg="${ARTIFACTORY_DOCKER_REGISTRY}" \
+        '/--set fluent-bit\.enabled=true/ { print; printf "    --set fluent-bit.image.repository=" reg "/fluent/fluent-bit \\\n"; next } 1' \
+        "$install_script" > "${install_script}.tmp" && mv "${install_script}.tmp" "$install_script"
+      log "fluent-bit image overridden: ${ARTIFACTORY_DOCKER_REGISTRY}/fluent/fluent-bit:4.2.3 (docker.io via Artifactory)"
     fi
     log "Patched base installer OCI chart URLs to use Artifactory (dir: ${patch_dir})"
   fi

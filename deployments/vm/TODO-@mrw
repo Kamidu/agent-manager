@@ -1,0 +1,56 @@
+Updated todo list
+
+Good news — 37 pods running, 3 completed. 4 pods in ImagePullBackOff (2 more blocked downstream).
+**Don't rerun the full install.**
+
+## Root cause
+
+k3d's internal containerd has no mirror/auth for these registries:
+- `cr.kgateway.dev` (kgateway)
+- `cr.fluentbit.io` (fluent-bit)
+- `registry.k8s.io` (kube-state-metrics)
+- `nn-docker-remote.artifactory.insim.biz` direct pull (postgresql — has it as a mirror endpoint for docker.io but not as a standalone pull target)
+
+`amp-api` and `amp-db-migration` are in `Init:0/1` waiting for postgresql — they'll unblock automatically.
+
+## Fix: pull on host, sideload into k3d
+
+The host Docker daemon has Artifactory mirrors configured; k3d containerd doesn't.
+`k3d image import` bypasses containerd pull entirely.
+
+```bash
+# Step 1: pull on the host
+docker pull cr.kgateway.dev/kgateway-dev/kgateway:v2.2.1
+docker pull cr.fluentbit.io/fluent/fluent-bit:4.2.3
+docker pull busybox
+docker pull registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+docker pull nn-docker-remote.artifactory.insim.biz/bitnami/postgresql:16
+```
+
+If `cr.fluentbit.io` is blocked on the host too, use the docker.io alias:
+```bash
+docker pull fluent/fluent-bit:4.2.3
+docker tag fluent/fluent-bit:4.2.3 cr.fluentbit.io/fluent/fluent-bit:4.2.3
+```
+
+```bash
+# Step 2: sideload into k3d
+k3d image import \
+  cr.kgateway.dev/kgateway-dev/kgateway:v2.2.1 \
+  cr.fluentbit.io/fluent/fluent-bit:4.2.3 \
+  busybox \
+  registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0 \
+  nn-docker-remote.artifactory.insim.biz/bitnami/postgresql:16 \
+  -c amp-local
+
+# Step 3: delete stuck pods so kubelet restarts them against the local image
+kubectl delete pod kgateway-7dcf4bf945-ldbsv          -n openchoreo-control-plane
+kubectl delete pod fluent-bit-5tfx4                    -n openchoreo-observability-plane
+kubectl delete pod kube-state-metrics-6fbd956566-sz25q -n openchoreo-observability-plane
+kubectl delete pod amp-postgresql-0                    -n wso2-amp
+```
+
+After postgresql starts, watch amp-api and amp-db-migration come up on their own:
+```bash
+kubectl get pods -n wso2-amp -w
+```
