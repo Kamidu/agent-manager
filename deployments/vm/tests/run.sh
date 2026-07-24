@@ -206,6 +206,8 @@ assert_eq "caddy no 22893 dead-end" "" "$(grep -F '127.0.0.1:22893' <<<"$cf")"
 assert_eq "caddy no cp when disabled" "" "$(grep -F 'cp.amp' <<<"$cf")"
 assert_eq "caddy api upstream" "	reverse_proxy 127.0.0.1:9000" "$(grep -F '127.0.0.1:9000' <<<"$cf")"
 assert_eq "caddy observer upstream" "	reverse_proxy 127.0.0.1:9098" "$(grep -F '127.0.0.1:9098' <<<"$cf")"
+assert_eq "caddy registry site" "registry.amp.203.0.113.10.sslip.io {" "$(grep -F 'registry.amp' <<<"$cf" | head -1)"
+assert_eq "caddy registry upstream" "	reverse_proxy 127.0.0.1:10082" "$(grep -F -A6 'registry.amp.203.0.113.10.sslip.io {' <<<"$cf" | grep -F 'reverse_proxy' | head -1)"
 
 # --- render_caddyfile: always 443-only TLS-ALPN-01 (disable_redirects + per-site
 #     issuer acme/disable_http_challenge); no http mode, no port-80 redirect ---
@@ -214,8 +216,8 @@ assert_eq "global disable_redirects"   "yes" "$(has "$cf_tls" 'auto_https disabl
 assert_eq "issuer acme"                "yes" "$(has "$cf_tls" 'issuer acme')"
 assert_eq "disable_http_challenge"     "yes" "$(has "$cf_tls" 'disable_http_challenge')"
 assert_eq "keeps email"                "yes" "$(has "$cf_tls" 'email ops@example.com')"
-# per-site tls block on each public host incl. cp (6) + the agent wildcard (1) = 7
-assert_eq "tls block per site (7)"     "7"   "$(grep -cF 'issuer acme' <<<"$cf_tls")"
+# per-site tls block on each public host incl. cp (7) + the agent wildcard (1) = 8
+assert_eq "tls block per site (8)"     "8"   "$(grep -cF 'issuer acme' <<<"$cf_tls")"
 # never serves plain http / disables auto-https
 assert_eq "no auto_https off"          "no"  "$(has "$cf_tls" 'auto_https off')"
 assert_eq "no http:// public site"     "no"  "$(has "$cf_tls" 'http://console')"
@@ -233,11 +235,18 @@ assert_eq "caddy cp tls skip verify" "			tls_insecure_skip_verify" "$(grep -F 't
 #     (else OpenChoreo uses am-gateway.localhost and the console invoke URL is empty,
 #     with try-out 405ing against its own host). Reads AMP_AGENTS_BASE from scope. ---
 (
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
   pr="$(build_platform_resources_helm_args)"
   assert_eq "platform-resources oauth tokenUrl (direct svc)" \
     "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token" \
     "$(grep -F 'global.oauth.tokenUrl' <<<"$pr")"
+  assert_eq "platform-resources public registry endpoint" \
+    "global.registry.endpoint=registry.amp.example.com" \
+    "$(grep -F 'global.registry.endpoint' <<<"$pr")"
+  assert_eq "platform-resources registry tls verify" \
+    "global.defaultResources.registry.tlsVerify=true" \
+    "$(grep -F 'global.defaultResources.registry.tlsVerify' <<<"$pr")"
   assert_eq "platform-resources oauth not via host.k3d.internal" "no" "$(has "$pr" 'host.k3d.internal')"
   assert_eq "platform-resources env gateway host (public agents base)" \
     "environment.gateway.http.host=agents.amp.example.com" \
@@ -296,6 +305,7 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=cp.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
 
@@ -333,6 +343,7 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=""
   AMP_AGENTS_BASE=agents.amp.example.com
   assert_eq "core amp no cp when AMP_HOST_CP empty" "" \
@@ -354,6 +365,7 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=cp.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
   cf_le="$(caddyfile letsencrypt "ops@example.com" "" "" "")"
@@ -374,6 +386,7 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=cp.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
   cf_byoc="$(caddyfile byoc "" /opt/amp/certs/fullchain.pem /opt/amp/certs/privkey.pem "")"
@@ -414,6 +427,7 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=""
   AMP_AGENTS_BASE=agents.amp.example.com
   cf_up80="$(caddyfile upstream "" "" "" "")"
@@ -430,6 +444,7 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   assert_eq "derive console default" "console.amp.mycompany.com" "$AMP_HOST_CONSOLE"
   assert_eq "derive api default"     "api.amp.mycompany.com"     "$AMP_HOST_API"
   assert_eq "derive thunder default" "thunder.amp.mycompany.com" "$AMP_HOST_THUNDER"
+  assert_eq "derive registry default" "registry.amp.mycompany.com" "$AMP_HOST_REGISTRY"
   assert_eq "derive cp default"      "cp.amp.mycompany.com"      "$AMP_HOST_CP"
   assert_eq "derive agents default"  "agents.amp.mycompany.com"  "$AMP_AGENTS_BASE"
 )
@@ -502,6 +517,7 @@ assert_eq "init has DOMAIN_BASE"  "yes" "$(has "$init_out" 'DOMAIN_BASE=')"
 assert_eq "init has TLS_MODE"     "yes" "$(has "$init_out" 'TLS_MODE=')"
 assert_eq "init mentions byoc keys" "yes" "$(has "$init_out" 'TLS_CERT_FILE=')"
 assert_eq "init mentions upstream port" "yes" "$(has "$init_out" 'UPSTREAM_LISTEN_PORT=')"
+assert_eq "init mentions HOST_REGISTRY" "yes" "$(has "$init_out" 'HOST_REGISTRY=')"
 assert_eq "init mentions letsencrypt-dns" "yes" "$(has "$init_out" 'letsencrypt-dns')"
 assert_eq "init mentions selfsigned"      "yes" "$(has "$init_out" 'selfsigned')"
 assert_eq "init mentions DNS_PROVIDER"    "yes" "$(has "$init_out" 'DNS_PROVIDER=')"
@@ -523,6 +539,7 @@ CFG
 # upstream mode skips cert + DNS hard checks, so dry-run can run hermetically.
 dry_out="$(bash "$ADV" --config "$tmp_cfg" --dry-run 2>&1)"
 assert_eq "dry-run renders console site" "yes" "$(has "$dry_out" 'http://console.amp.mycompany.com:80 {')"
+assert_eq "dry-run renders registry site" "yes" "$(has "$dry_out" 'http://registry.amp.mycompany.com:80 {')"
 assert_eq "dry-run renders amp helm arg" "yes" "$(has "$dry_out" 'serverPublicURL=https://api.amp.mycompany.com')"
 assert_eq "dry-run does NOT start install" "no" "$(has "$dry_out" 'Running base installer')"
 rm -f "$tmp_cfg"
@@ -559,6 +576,7 @@ rm -f "$tmp_cfg"
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=""
   AMP_AGENTS_BASE=agents.amp.example.com
   cf_tp="$(caddyfile upstream "" "" "" 80 "130.211.0.0/22 35.191.0.0/16")"
@@ -573,11 +591,13 @@ rm -f "$tmp_cfg"
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=cp.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
   sans="$(tls_san_list)"
   assert_eq "san list console is first" "console.amp.example.com" "$(head -1 <<<"$sans")"
   assert_eq "san list has api"      "yes" "$(has "$sans" 'api.amp.example.com')"
+  assert_eq "san list has registry" "yes" "$(has "$sans" 'registry.amp.example.com')"
   assert_eq "san list has cp"       "yes" "$(has "$sans" 'cp.amp.example.com')"
   assert_eq "san list has agents wildcard" "yes" "$(has "$sans" '*.agents.amp.example.com')"
 )
@@ -587,6 +607,7 @@ rm -f "$tmp_cfg"
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=""
   AMP_AGENTS_BASE=agents.amp.example.com
   assert_eq "san list omits cp when empty" "no" "$(has "$(tls_san_list)" 'cp.amp.example.com')"
@@ -599,6 +620,7 @@ rm -f "$tmp_cfg"
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=cp.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
   lego="$(build_lego_args ops@example.com route53 /opt/amp/certs "" run)"
@@ -692,6 +714,7 @@ rm -rf "$tmp_dns"
   AMP_HOST_THUNDER=thunder.amp.example.com
   AMP_HOST_OBSERVER=observer.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
+  AMP_HOST_REGISTRY=registry.amp.example.com
   AMP_HOST_CP=cp.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
   ACME_EMAIL=ops@example.com DNS_PROVIDER=route53

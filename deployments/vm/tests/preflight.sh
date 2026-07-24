@@ -39,6 +39,7 @@ AMP_HOST_API=api.amp.mycompany.com
 AMP_HOST_THUNDER=thunder.amp.mycompany.com
 AMP_HOST_OBSERVER=observer.amp.mycompany.com
 AMP_HOST_GATEWAY=gateway.amp.mycompany.com
+AMP_HOST_REGISTRY=registry.amp.mycompany.com
 AMP_HOST_CP=cp.amp.mycompany.com
 
 # Good cert: wildcard for services + wildcard for agents.

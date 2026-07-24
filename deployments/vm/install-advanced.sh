@@ -98,6 +98,7 @@ EXTERNAL_GATEWAYS=true             # expose the cp endpoint for external data-pl
 # HOST_THUNDER=thunder.amp.mycompany.com
 # HOST_OBSERVER=observer.amp.mycompany.com
 # HOST_GATEWAY=gateway.amp.mycompany.com
+# HOST_REGISTRY=registry.amp.mycompany.com
 # HOST_CP=cp.amp.mycompany.com
 # AGENTS_BASE=agents.amp.mycompany.com   # deployed-agent wildcard base
 TEMPLATE
@@ -124,7 +125,7 @@ if ! validate_config; then
 fi
 # Declare the host vars in this scope so the lib-vm.sh cores (dynamic scope) see them.
 AMP_HOST_CONSOLE="" AMP_HOST_API="" AMP_HOST_THUNDER="" AMP_HOST_OBSERVER=""
-AMP_HOST_GATEWAY="" AMP_HOST_CP="" AMP_AGENTS_BASE=""
+AMP_HOST_GATEWAY="" AMP_HOST_REGISTRY="" AMP_HOST_CP="" AMP_AGENTS_BASE=""
 derive_hosts
 
 # letsencrypt-dns and selfsigned both produce a cert/key and reuse the byoc serving
@@ -380,6 +381,20 @@ run_advanced_install() {
   ( set +e; source "$install_script" ) || rc=$?
   [[ "$rc" -eq 0 ]] || die "Base installer exited $rc"
 
+  # install.sh is idempotent and skips existing releases, so re-runs would not
+  # apply updated PLATFORM_RESOURCES_HELM_ARGS (registry endpoint, tlsVerify,
+  # gateway host overrides). Force a chart sync here so config changes take
+  # effect without a full teardown.
+  local pr_registry="${ARTIFACTORY_GHCR_REGISTRY:-ghcr.io}/wso2"
+  log "Syncing amp-platform-resources overrides (registry endpoint + TLS verify)"
+  helm upgrade --install amp-platform-resources \
+    "oci://${pr_registry}/wso2-amp-platform-resources-extension" \
+    --version "${AMP_VERSION}" \
+    --namespace default \
+    --timeout 1800s \
+    "${PLATFORM_RESOURCES_HELM_ARGS[@]}" \
+    || die "amp-platform-resources sync failed"
+
   start_caddy_advanced
 
   # DNS-01 certs are short-lived; install a daily renewal timer (lego renew + Caddy
@@ -395,6 +410,7 @@ run_advanced_install() {
   API:       https://${AMP_HOST_API}
   Thunder:   https://${AMP_HOST_THUNDER}
   Observer:  https://${AMP_HOST_OBSERVER}
+  Registry:  https://${AMP_HOST_REGISTRY}
   OTel ingest: https://${AMP_HOST_GATEWAY}/otel
   Deployed agents: https://<org>-<project>.${AMP_AGENTS_BASE}/...
 EOF
@@ -409,9 +425,9 @@ EOF
 
 if [[ "$DRY_RUN" == "true" ]]; then
   log "DRY RUN — derived hosts:"
-  printf '  console=%s api=%s thunder=%s observer=%s gateway=%s cp=%s agents=%s\n' \
+  printf '  console=%s api=%s thunder=%s observer=%s gateway=%s registry=%s cp=%s agents=%s\n' \
     "$AMP_HOST_CONSOLE" "$AMP_HOST_API" "$AMP_HOST_THUNDER" "$AMP_HOST_OBSERVER" \
-    "$AMP_HOST_GATEWAY" "${AMP_HOST_CP:-<none>}" "$AMP_AGENTS_BASE"
+    "$AMP_HOST_GATEWAY" "$AMP_HOST_REGISTRY" "${AMP_HOST_CP:-<none>}" "$AMP_AGENTS_BASE"
   log "DRY RUN — amp helm args:"; amp_helm_args
   log "DRY RUN — Caddyfile (${TLS_MODE}):"; render_active_caddyfile
   case "$TLS_MODE" in

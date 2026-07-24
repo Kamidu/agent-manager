@@ -13,6 +13,7 @@ derive_hosts() {
   AMP_HOST_THUNDER="${HOST_THUNDER:-thunder.${DOMAIN_BASE}}"
   AMP_HOST_OBSERVER="${HOST_OBSERVER:-observer.${DOMAIN_BASE}}"
   AMP_HOST_GATEWAY="${HOST_GATEWAY:-gateway.${DOMAIN_BASE}}"
+  AMP_HOST_REGISTRY="${HOST_REGISTRY:-registry.${DOMAIN_BASE}}"
   AMP_AGENTS_BASE="${AGENTS_BASE:-agents.${DOMAIN_BASE}}"
   if [[ "${EXTERNAL_GATEWAYS:-true}" == "true" ]]; then
     AMP_HOST_CP="${HOST_CP:-cp.${DOMAIN_BASE}}"
@@ -127,7 +128,7 @@ validate_cert() {
     return 1
   }
   for want in "$AMP_HOST_CONSOLE" "$AMP_HOST_API" "$AMP_HOST_THUNDER" \
-              "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY" "${AMP_HOST_CP:-}"; do
+              "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY" "${AMP_HOST_REGISTRY:-}" "${AMP_HOST_CP:-}"; do
     [[ -z "$want" ]] && continue
     _san_covers "$want" || CERT_ERRORS+=("cert SANs do not cover $want")
   done
@@ -183,7 +184,7 @@ validate_dns() {
   DNS_ERRORS=()
   local host got ip ok e
   for host in "$AMP_HOST_CONSOLE" "$AMP_HOST_API" "$AMP_HOST_THUNDER" \
-              "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY" "${AMP_HOST_CP:-}" \
+              "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY" "${AMP_HOST_REGISTRY:-}" "${AMP_HOST_CP:-}" \
               "probe.${AMP_AGENTS_BASE}"; do
     [[ -z "$host" ]] && continue
     got="$(_resolve_host "$host")"

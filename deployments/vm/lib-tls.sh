@@ -21,7 +21,7 @@ LEGO_IMAGE="${LEGO_IMAGE:-goacme/lego:v4.35.2}"
 # shellcheck disable=SC2154,SC2153  # AMP_HOST_*/AMP_AGENTS_BASE come from the caller's scope by design.
 tls_san_list() {
   printf '%s\n' "$AMP_HOST_CONSOLE" "$AMP_HOST_API" "$AMP_HOST_THUNDER" \
-    "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY"
+    "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY" "${AMP_HOST_REGISTRY:-}"
   [[ -n "${AMP_HOST_CP:-}" ]] && printf '%s\n' "$AMP_HOST_CP"
   printf '*.%s\n' "$AMP_AGENTS_BASE"
 }

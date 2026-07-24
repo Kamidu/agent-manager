@@ -87,6 +87,8 @@ run_install() {
   # shellcheck disable=SC2034
   local AMP_AGENTS_BASE="agents.${VM_IP}.sslip.io"
   # shellcheck disable=SC2034
+  local AMP_HOST_REGISTRY="$(vm_host registry "$VM_IP")"
+  # shellcheck disable=SC2034
   mapfile -t PLATFORM_RESOURCES_HELM_ARGS < <(build_platform_resources_helm_args)
   # shellcheck disable=SC2034
   mapfile -t OBSERVABILITY_HELM_ARGS < <(build_observability_helm_args "$VM_IP")
@@ -139,6 +141,7 @@ cat <<EOF
   API:       https://$(vm_host api "$VM_IP")
   Thunder:   https://$(vm_host thunder "$VM_IP")
   Observer:  https://$(vm_host observer "$VM_IP")
+  Registry:  https://$(vm_host registry "$VM_IP")
   OTel ingest: https://$(vm_host gateway "$VM_IP")/otel
   Deployed agents: https://<org>-<project>.agents.${VM_IP}.sslip.io/...
 EOF

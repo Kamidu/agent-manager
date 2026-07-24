@@ -179,10 +179,12 @@ build_cp_helm_args() {
 #    externalURL: the invoke URL is empty and try-out falls back to a relative /chat
 #    (405) — the very symptom this override exists to fix. Both bind listenerName
 #    http (TLS terminates at Caddy) and differ only in advertised scheme.
-# shellcheck disable=SC2154  # AMP_AGENTS_BASE comes from the caller's scope by design.
+# shellcheck disable=SC2154  # AMP_AGENTS_BASE/AMP_HOST_REGISTRY come from the caller's scope by design.
 build_platform_resources_helm_args() {
   printf '%s\n' \
     "--set" "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token" \
+    "--set" "global.registry.endpoint=${AMP_HOST_REGISTRY}" \
+    "--set" "global.defaultResources.registry.tlsVerify=true" \
     "--set" "environment.gateway.http.host=${AMP_AGENTS_BASE}" \
     "--set" "environment.gateway.http.port=443" \
     "--set" "environment.gateway.https.host=${AMP_AGENTS_BASE}" \
@@ -359,7 +361,7 @@ render_dataplane_external_ingress() {
 }
 
 # caddyfile <tls_mode> <email> <cert_file> <key_file> <listen_port>
-# Hostname-driven core. Reads AMP_HOST_CONSOLE/API/THUNDER/OBSERVER/GATEWAY/CP
+# Hostname-driven core. Reads AMP_HOST_CONSOLE/API/THUNDER/OBSERVER/GATEWAY/REGISTRY/CP
 # (CP empty => no cp site) and AMP_AGENTS_BASE. tls_mode is one of:
 #   letsencrypt  — terminate TLS on :443, auto-ACME via TLS-ALPN-01 (no port 80),
 #                  on-demand certs for the per-agent wildcard.
@@ -423,6 +425,9 @@ caddyfile() {
   # URL. (Agent OTel ingestion is unaffected: it goes in-cluster to the runtime
   # ClusterIP, not through this host.)
   _site "$AMP_HOST_GATEWAY"  19080  # api-platform gateway via kgateway (LLM proxy)
+  if [[ -n "${AMP_HOST_REGISTRY:-}" ]]; then
+    _site "$AMP_HOST_REGISTRY" 10082  # workflow-plane docker registry (public TLS front door)
+  fi
 
   if [[ -n "$AMP_HOST_CP" ]]; then
     # 9243 is HTTPS with a self-signed cert -> proxy over TLS, skip verification.
@@ -452,12 +457,13 @@ caddyfile() {
 # the TLS-ALPN-01 challenge so issuance never needs inbound port 80.
 render_caddyfile() {
   local ip="$1" email="$2" external_gateways="${3:-true}"
-  local AMP_HOST_CONSOLE AMP_HOST_API AMP_HOST_THUNDER AMP_HOST_OBSERVER AMP_HOST_GATEWAY AMP_HOST_CP AMP_AGENTS_BASE
+  local AMP_HOST_CONSOLE AMP_HOST_API AMP_HOST_THUNDER AMP_HOST_OBSERVER AMP_HOST_GATEWAY AMP_HOST_REGISTRY AMP_HOST_CP AMP_AGENTS_BASE
   AMP_HOST_CONSOLE="$(vm_host console "$ip")"
   AMP_HOST_API="$(vm_host api "$ip")"
   AMP_HOST_THUNDER="$(vm_host thunder "$ip")"
   AMP_HOST_OBSERVER="$(vm_host observer "$ip")"
   AMP_HOST_GATEWAY="$(vm_host gateway "$ip")"
+  AMP_HOST_REGISTRY="$(vm_host registry "$ip")"
   AMP_HOST_CP=""; [[ "$external_gateways" == "true" ]] && AMP_HOST_CP="$(vm_host cp "$ip")"
   AMP_AGENTS_BASE="agents.${ip}.sslip.io"
   caddyfile letsencrypt "$email" "" "" ""
