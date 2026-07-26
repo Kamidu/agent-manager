@@ -218,6 +218,7 @@ The config file is plain shell (sourced by the installer). The keys for a public
 | `TLS_MODE` | yes | `letsencrypt`, `byoc`, or `upstream` |
 | `ACME_EMAIL` | recommended for letsencrypt | ACME contact for expiry notices |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | byoc | Paths to the operator certificate and private key |
+| `TLS_CA_FILE` | no (byoc) | CA that signed `TLS_CERT_FILE`, if not already publicly trusted. Passed to the Workflow Plane so `podman build`/`podman push` can verify `registry.<DOMAIN_BASE>`'s certificate |
 | `UPSTREAM_LISTEN_PORT` | upstream | Plain-HTTP port Caddy listens on behind the LB (default `80`). Must not be a loopback-bound cluster port (3000/8080/9000/9098/9243/19080/22893); `80` is safe |
 | `UPSTREAM_TRUSTED_PROXIES` | upstream | Space-separated CIDRs of the LB whose `X-Forwarded-*` headers Caddy trusts (default `0.0.0.0/0`) |
 | `EXTERNAL_GATEWAYS` | no | `true` (default) exposes the `cp` endpoint for external data-plane gateways |
@@ -284,6 +285,12 @@ TLS_CERT_FILE=/opt/amp/certs/fullchain.pem
 TLS_KEY_FILE=/opt/amp/certs/privkey.pem
 ```
 
+If the certificate is signed by a CA that isn't already publicly trusted (an internal or corporate CA), also set `TLS_CA_FILE` to that CA's certificate. The installer passes it to the Workflow Plane's build/publish steps so `podman build`/`podman push` can verify the registry's certificate; without it, agent builds fail with `tls: failed to verify certificate: x509: certificate signed by unknown authority` when pulling or pushing images against `registry.<DOMAIN_BASE>`.
+
+```sh
+TLS_CA_FILE=/opt/amp/certs/ca.crt   # only if TLS_CERT_FILE isn't signed by a public CA
+```
+
 </TabItem>
 <TabItem value="private" label="Private network">
 
@@ -304,6 +311,7 @@ The config file is plain shell (sourced by the installer). The keys for a privat
 | `DNS_PROVIDER` | letsencrypt-dns | [lego](https://go-acme.github.io/lego/dns/) DNS provider that writes the DNS-01 TXT record, e.g. `route53`, `cloudflare`, `gcloud`, `azuredns`. Supply that provider's credential env vars in the same file |
 | `ACME_SERVER` | no | Override the ACME directory URL (e.g. Let's Encrypt staging) while testing `letsencrypt-dns` to avoid rate limits |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | byoc | Paths to the operator certificate and private key. For `letsencrypt-dns` and `selfsigned` these default to `/opt/amp/certs/fullchain.pem` and `/opt/amp/certs/privkey.pem` |
+| `TLS_CA_FILE` | no (byoc) | CA that signed `TLS_CERT_FILE`, if not already publicly trusted (typical for an internal CA). Passed to the Workflow Plane so `podman build`/`podman push` can verify `registry.<DOMAIN_BASE>`'s certificate. Not needed for `selfsigned` (wired in automatically) or `letsencrypt-dns` (publicly-trusted) |
 | `EXTERNAL_GATEWAYS` | no | `true` (default) exposes the `cp` endpoint for external data-plane gateways |
 | `HOST_CONSOLE`, `HOST_API`, `HOST_THUNDER`, `HOST_OBSERVER`, `HOST_GATEWAY`, `HOST_CP` | no | Override an individual service hostname (default `<svc>.<DOMAIN_BASE>`) |
 | `AGENTS_BASE` | no | Base for deployed-agent hostnames (default `agents.<DOMAIN_BASE>`) |
@@ -394,7 +402,7 @@ DOMAIN_BASE=amp.internal.mycompany.com
 TLS_MODE=selfsigned
 ```
 
-After install, import `/opt/amp/certs/ca.crt` into your clients' trust stores (via MDM/GPO) so browsers trust the console and API without warnings.
+After install, import `/opt/amp/certs/ca.crt` into your clients' trust stores (via MDM/GPO) so browsers trust the console and API without warnings. The installer also passes this CA to the Workflow Plane automatically, so `podman build`/`podman push` can verify `registry.<DOMAIN_BASE>`'s certificate during agent builds — no manual step needed.
 
 ### Bring your own certificate (`byoc`) {#adv-private-byoc}
 
@@ -416,6 +424,12 @@ DOMAIN_BASE=amp.internal.mycompany.com
 TLS_MODE=byoc
 TLS_CERT_FILE=/opt/amp/certs/fullchain.pem
 TLS_KEY_FILE=/opt/amp/certs/privkey.pem
+```
+
+Since this mode is typically used with an internal CA (not publicly trusted), also set `TLS_CA_FILE` to that CA's certificate so the Workflow Plane's build/publish steps can verify `registry.<DOMAIN_BASE>`'s certificate. Without it, agent builds fail with `tls: failed to verify certificate: x509: certificate signed by unknown authority` when pulling or pushing images against the registry.
+
+```sh
+TLS_CA_FILE=/opt/amp/certs/ca.crt   # your internal CA's certificate
 ```
 
 </TabItem>
@@ -460,6 +474,7 @@ The control-plane endpoint `https://cp.<DOMAIN_BASE>` is exposed by default. Gen
 
 - **Config rejected before install.** The installer prints which key is missing or invalid (e.g. an unknown `TLS_MODE`, or `byoc` without `TLS_CERT_FILE`). Fix `amp-config.env` and re-run.
 - **Certificate validation failed (byoc).** The cert and key do not match, the cert is expired, or its SANs do not cover a service host or the `*.<AGENTS_BASE>` wildcard. The message names the specific problem; reissue the certificate with the required SANs (see BYOC certificate requirements in your network's tab: [public](#adv-public-byoc) or [private](#adv-private-byoc)).
+- **Agent builds fail with `x509: certificate signed by unknown authority` pulling/pushing against `registry.<DOMAIN_BASE>`.** The build pipeline (Podman, in the Workflow Plane) doesn't trust the CA that signed the registry's certificate. `selfsigned` mode wires this CA in automatically; in `byoc` mode set `TLS_CA_FILE` to the CA that signed `TLS_CERT_FILE` (see [public](#adv-public-byoc) or [private](#adv-private-byoc)) and re-run the installer so the change reaches the already-installed `amp-platform-resources` release. `letsencrypt`/`letsencrypt-dns` need no action (publicly-trusted CA).
 - **DNS pre-flight failed (letsencrypt).** One or more hostnames do not resolve to the VM. Create the A records listed under the **Public network** tab ([DNS (public)](#adv-public-dns)) and re-run. The message names the hosts and the expected IP.
 - **Certificates never issue / hosts unreachable (letsencrypt).** Open inbound `:443` in your cloud security group, and ensure it reaches the VM as **raw TCP**; a TLS-terminating load balancer in front breaks TLS-ALPN-01. If you have such a load balancer, use `upstream` mode instead. If the VM has no public ingress at all, use `letsencrypt-dns` (DNS-01) instead. Check `docker logs amp-caddy`.
 - **DNS-01 issuance failed (letsencrypt-dns).** `lego` could not create or validate the `_acme-challenge` TXT record. Check that `DNS_PROVIDER` is correct and its credential env vars are set in `amp-config.env`, that those credentials can write to the zone, and that the zone is delegated to that provider. Re-run with `ACME_SERVER` pointed at Let's Encrypt staging to iterate without hitting rate limits.

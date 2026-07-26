@@ -19,6 +19,10 @@ spec:
           emptyDir: {}
       container:
         image: ghcr.io/openchoreo/podman-runner:v1.2
+        {{- if .Values.global.registry.caCert }}
+        env:
+          {{- include "openchoreo-workflow-plane.registryCaEnvVar" . | nindent 10 }}
+        {{- end }}
         command:
           - sh
           - -c
@@ -62,6 +66,13 @@ spec:
             events_logger="file"
             runtime="crun"
             CEOF
+
+            # Trust setup for the registry (buildpack image cache and/or push
+            # destination): honors global.defaultResources.registry.tlsVerify
+            # consistently, and installs global.registry.caCert into podman's
+            # per-registry trust dir when set, so a self-signed/internal registry CA
+            # can be verified instead of only skipped.
+            {{- include "openchoreo-workflow-plane.registryTrustSetup" . | nindent 12 }}
 
             echo ">> Initializing build environment"
             mkdir -p /run/podman

@@ -264,6 +264,29 @@ assert_eq "caddy cp tls skip verify" "			tls_insecure_skip_verify" "$(grep -F 't
   assert_eq "platform-resources env gateway https port 443" \
     "environment.gateway.https.port=443" \
     "$(grep -F 'environment.gateway.https.port' <<<"$pr")"
+  # No AMP_REGISTRY_CA_FILE set (letsencrypt/letsencrypt-dns/upstream, or byoc with a
+  # publicly-trusted cert) => no --set-file at all; the registry's stock CA bundle is
+  # sufficient and nothing should reference a nonexistent CA path.
+  assert_eq "platform-resources no registry CA set-file by default" "no" \
+    "$(has "$pr" '--set-file')"
+)
+
+# --- build_platform_resources_helm_args: registry CA (selfsigned/byoc TLS modes with
+#     a non-publicly-trusted cert). AMP_REGISTRY_CA_FILE is passed via --set-file so
+#     the chart can inject it into the build/publish Podman containers' per-registry
+#     trust dir (global.registry.caCert) — without this, podman build/push fails
+#     with "certificate signed by unknown authority" against a self-signed/internal
+#     registry cert. ---
+(
+  AMP_HOST_REGISTRY=registry.amp.example.com
+  AMP_AGENTS_BASE=agents.amp.example.com
+  AMP_REGISTRY_CA_FILE=/opt/amp/certs/ca.crt
+  pr="$(build_platform_resources_helm_args)"
+  assert_eq "platform-resources registry CA set-file flag present" "yes" \
+    "$(has "$pr" '--set-file')"
+  assert_eq "platform-resources registry CA set-file value" \
+    "global.registry.caCert=/opt/amp/certs/ca.crt" \
+    "$(grep -F 'global.registry.caCert' <<<"$pr")"
 )
 
 # --- render_coredns_vm_config rewrites the in-cluster names to the server node ---

@@ -49,6 +49,11 @@ validate_config() {
     byoc)
       [[ -n "${TLS_CERT_FILE:-}" ]] || CONFIG_ERRORS+=("TLS_CERT_FILE is required for byoc mode")
       [[ -n "${TLS_KEY_FILE:-}" ]]  || CONFIG_ERRORS+=("TLS_KEY_FILE is required for byoc mode")
+      # TLS_CA_FILE is optional: only needed when TLS_CERT_FILE is signed by a CA that
+      # isn't already publicly trusted (internal/corporate CA), so the registry can be
+      # verified by the build pipeline instead of only reachable over HTTPS blindly.
+      [[ -z "${TLS_CA_FILE:-}" || -r "${TLS_CA_FILE}" ]] \
+        || CONFIG_ERRORS+=("TLS_CA_FILE is set but not readable: ${TLS_CA_FILE}")
       ;;
     upstream)
       # UPSTREAM_LISTEN_PORT defaults to 80; if set, it must be a valid port (so a typo

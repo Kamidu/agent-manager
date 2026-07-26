@@ -20,6 +20,10 @@ spec:
             secretName: '{{ "{{" }}workflow.parameters.registry-push-secret{{ "}}" }}'
       container:
         image: ghcr.io/openchoreo/podman-runner:v1.0
+        {{- if .Values.global.registry.caCert }}
+        env:
+          {{- include "openchoreo-workflow-plane.registryCaEnvVar" . | nindent 10 }}
+        {{- end }}
         command:
           - sh
           - -c
@@ -44,6 +48,13 @@ spec:
             [storage.options.overlay]
             mount_program = "/usr/bin/fuse-overlayfs"
             EOF
+
+            # Trust setup for the push destination: honors
+            # global.defaultResources.registry.tlsVerify consistently, and installs
+            # global.registry.caCert into podman's per-registry trust dir when set, so
+            # a self-signed/internal registry CA can be verified instead of only
+            # skipped (the --tls-verify flags below still take precedence per-call).
+            {{- include "openchoreo-workflow-plane.registryTrustSetup" . | nindent 12 }}
 
             podman load -i /mnt/vol/app-image.tar
 

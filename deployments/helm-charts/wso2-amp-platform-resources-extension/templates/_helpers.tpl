@@ -90,3 +90,50 @@ Parameters:
   {{- fail (printf "Buildpack image with id '%s' not found in buildpackCache.images" $id) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Registry CA env var — renders a container env entry carrying
+global.registry.caCert (PEM), when set. Read by
+"openchoreo-workflow-plane.registryTrustSetup" (below) inside the container's shell
+script. Kept in an env var rather than baked straight into the shell heredoc so the
+YAML block-scalar indentation of the surrounding script can never corrupt the
+multi-line PEM content.
+Usage: {{ include "openchoreo-workflow-plane.registryCaEnvVar" . }}  (inside an `env:` list)
+*/}}
+{{- define "openchoreo-workflow-plane.registryCaEnvVar" -}}
+{{- if .Values.global.registry.caCert }}
+- name: AMP_REGISTRY_CA_CERT
+  value: {{ .Values.global.registry.caCert | quote }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Registry trust setup — shell snippet that configures Podman's trust for
+REGISTRY_ENDPOINT before any pull/build/push:
+  1. Always appends a [[registry]] block to /etc/containers/registries.conf setting
+     `insecure` from global.defaultResources.registry.tlsVerify, so tlsVerify=false
+     behaves consistently across every build/publish template (previously only
+     publish-image.yaml's explicit --tls-verify flag honored it).
+  2. When global.registry.caCert is set, writes it to the registry's certs.d
+     directory (/etc/containers/certs.d/<endpoint>/ca.crt) — the containers/image
+     mechanism for trusting one registry's custom CA (self-signed or
+     internal/corporate) without disabling verification or touching the container's
+     system-wide trust store. No-op (verification stays on, using the image's stock
+     CA bundle) when caCert is unset.
+Must run after AMP_REGISTRY_CA_CERT is available (see registryCaEnvVar) and before
+any podman/pack command that touches REGISTRY_ENDPOINT. Assumes the caller has
+already created /etc/containers/ (mkdir -p).
+Usage: {{ include "openchoreo-workflow-plane.registryTrustSetup" . | nindent 12 }}
+*/}}
+{{- define "openchoreo-workflow-plane.registryTrustSetup" -}}
+{{- $endpoint := include "openchoreo-workflow-plane.registryEndpoint" . }}
+cat >> /etc/containers/registries.conf <<AMPREGISTRYCONF
+[[registry]]
+location = "{{ $endpoint }}"
+insecure = {{ not .Values.global.defaultResources.registry.tlsVerify }}
+AMPREGISTRYCONF
+{{- if .Values.global.registry.caCert }}
+mkdir -p "/etc/containers/certs.d/{{ $endpoint }}"
+printf '%s\n' "$AMP_REGISTRY_CA_CERT" > "/etc/containers/certs.d/{{ $endpoint }}/ca.crt"
+{{- end -}}
+{{- end -}}

@@ -17,6 +17,10 @@ spec:
             sizeLimit: 10Gi
       container:
         image: ghcr.io/openchoreo/podman-runner:v1.2
+        {{- if .Values.global.registry.caCert }}
+        env:
+          {{- include "openchoreo-workflow-plane.registryCaEnvVar" . | nindent 10 }}
+        {{- end }}
         command:
           - sh
           - -c
@@ -61,11 +65,18 @@ spec:
             [storage.options.overlay]
             EOF
 
+            # Trust setup for the registry (mirror source and/or push destination):
+            # honors global.defaultResources.registry.tlsVerify consistently (previously
+            # only the publish-image step's --tls-verify flag honored it), and installs
+            # global.registry.caCert into podman's per-registry trust dir when set, so a
+            # self-signed/internal registry CA can be verified instead of only skipped.
+            {{- include "openchoreo-workflow-plane.registryTrustSetup" . | nindent 12 }}
+
             # Build podman command using positional parameters ($1, $2, $3, ...).
             # "set --" assigns args to $@. Each arg stays separate, preserving spaces in values.
             # "$@" then executes the command with each parameter as a distinct argument.
             # This avoids eval and prevents shell injection.
-            set -- podman build -t "$IMAGE" -f "$WORKDIR/$DOCKERFILE_PATH"
+            set -- podman build --tls-verify={{ .Values.global.defaultResources.registry.tlsVerify }} -t "$IMAGE" -f "$WORKDIR/$DOCKERFILE_PATH"
 
             # Add --env flags from the buildEnv JSON array
             # Each "set -- "$@" --env "$env_kv"" appends --env and KEY=VALUE as separate args

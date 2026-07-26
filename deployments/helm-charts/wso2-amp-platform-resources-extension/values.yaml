@@ -31,6 +31,14 @@ global:
     # For local registry: "host.k3d.internal:10082"
     # For external registry with baseDomain: automatically uses "registry.<baseDomain>"
     endpoint: "host.k3d.internal:10082"
+    # -- PEM-encoded CA certificate that signed the registry's TLS certificate, when
+    # that certificate is not publicly trusted (self-signed, or an internal/corporate
+    # CA). Injected into the build/publish Podman containers' per-registry trust
+    # directory (/etc/containers/certs.d/<endpoint>/ca.crt) so podman/pack can verify
+    # the registry's certificate without disabling TLS verification for it. Leave
+    # empty for a registry with a publicly-trusted certificate (Let's Encrypt, ACM,
+    # etc.) or a plain-HTTP local registry.
+    caCert: ""
 
   # -- Default resources configuration
   defaultResources:

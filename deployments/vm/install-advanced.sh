@@ -55,12 +55,18 @@ ACME_EMAIL=ops@mycompany.com       # ACME contact (recommended)
 # --- selfsigned mode (fully offline: no public zone, no internal CA) ---
 # Generates a local CA + leaf covering every service host + the *.<AGENTS_BASE>
 # wildcard. The CA is written to /opt/amp/certs/ca.crt — import it into client trust
-# stores (MDM/GPO) so browsers trust the console/API without warnings. No extra keys.
+# stores (MDM/GPO) so browsers trust the console/API without warnings. It is also
+# passed automatically to the build pipeline (Workflow Plane) so podman build/push
+# can verify the registry's certificate. No extra keys.
 
 # --- byoc mode (operator-supplied cert/key) ---
 # The cert MUST carry SANs covering *.<DOMAIN_BASE> AND *.<AGENTS_BASE>.
 # TLS_CERT_FILE=/opt/amp/certs/fullchain.pem
 # TLS_KEY_FILE=/opt/amp/certs/privkey.pem
+# TLS_CA_FILE=/opt/amp/certs/ca.crt          # optional: only if TLS_CERT_FILE is
+#   signed by a CA not already publicly trusted (internal/corporate CA). Passed to
+#   the build pipeline so podman build/push can verify the registry's certificate
+#   instead of failing with "x509: certificate signed by unknown authority".
 
 # --- upstream mode (TLS terminated by a cloud LB / proxy in front of the VM) ---
 # The LB must forward each hostname to the VM and set X-Forwarded-Proto: https.
@@ -274,6 +280,19 @@ run_advanced_install() {
   mapfile -t GATEWAY_HELM_ARGS < <(gateway_helm_args)
   # shellcheck disable=SC2034
   mapfile -t CP_HELM_ARGS < <(cp_helm_args)
+  # AMP_REGISTRY_CA_FILE feeds build_platform_resources_helm_args (--set-file
+  # global.registry.caCert=...), so the build/publish Podman containers can verify
+  # the registry's certificate instead of failing with "certificate signed by
+  # unknown authority". selfsigned always has one (generate_selfsigned_ca just wrote
+  # it above); byoc only if the operator set TLS_CA_FILE (validate_config already
+  # checked it's readable); other modes use a publicly-trusted CA and need none.
+  # shellcheck disable=SC2034  # read via dynamic scope by build_platform_resources_helm_args (lib-vm.sh)
+  local AMP_REGISTRY_CA_FILE=""
+  # shellcheck disable=SC2034  # read via dynamic scope by build_platform_resources_helm_args (lib-vm.sh)
+  case "$TLS_MODE" in
+    selfsigned) AMP_REGISTRY_CA_FILE="$(dirname "$TLS_CERT_FILE")/ca.crt" ;;
+    byoc)       AMP_REGISTRY_CA_FILE="${TLS_CA_FILE:-}" ;;
+  esac
   # shellcheck disable=SC2034
   mapfile -t PLATFORM_RESOURCES_HELM_ARGS < <(build_platform_resources_helm_args)
   # shellcheck disable=SC2034
@@ -418,7 +437,7 @@ EOF
   [[ "$TLS_MODE" == selfsigned ]] && cat <<EOF
 
   Self-signed mode: import the CA into client trust stores so browsers trust these
-  hosts without warnings:
+  hosts without warnings (already wired into the build pipeline automatically):
     CA cert: $(dirname "$TLS_CERT_FILE")/ca.crt
 EOF
 }
@@ -438,6 +457,14 @@ if [[ "$DRY_RUN" == "true" ]]; then
     selfsigned)
       log "DRY RUN — self-signed cert SANs:"
       tls_san_list
+      log "DRY RUN — registry CA: $(dirname "$TLS_CERT_FILE")/ca.crt (generated during install, passed to the build pipeline)"
+      ;;
+    byoc)
+      if [[ -n "${TLS_CA_FILE:-}" ]]; then
+        log "DRY RUN — registry CA: ${TLS_CA_FILE} (passed to the build pipeline)"
+      else
+        log "DRY RUN — registry CA: none set (TLS_CA_FILE unset) — fine if TLS_CERT_FILE is signed by a publicly-trusted CA; otherwise the build pipeline will fail to verify the registry's certificate"
+      fi
       ;;
   esac
   log "DRY RUN — k3d registries config (with Artifactory mirrors):"

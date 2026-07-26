@@ -43,7 +43,9 @@ build_lego_args() {
 }
 
 # generate_selfsigned_ca <cert_dir> [days] — create a local CA + a leaf signed by it
-# covering tls_san_list. Writes ca.crt (distribute to client trust stores),
+# covering tls_san_list. Writes ca.crt (distribute to client trust stores, and to the
+# build pipeline via AMP_REGISTRY_CA_FILE — see build_platform_resources_helm_args in
+# lib-vm.sh — so podman build/push can verify the registry's certificate),
 # fullchain.pem (leaf + CA) and privkey.pem (leaf key) under <cert_dir>. Side-effecting
 # (openssl + disk). Reads AMP_HOST_*/AMP_AGENTS_BASE.
 generate_selfsigned_ca() {

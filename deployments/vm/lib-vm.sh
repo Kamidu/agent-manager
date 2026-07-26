@@ -179,7 +179,15 @@ build_cp_helm_args() {
 #    externalURL: the invoke URL is empty and try-out falls back to a relative /chat
 #    (405) — the very symptom this override exists to fix. Both bind listenerName
 #    http (TLS terminates at Caddy) and differ only in advertised scheme.
-# shellcheck disable=SC2154  # AMP_AGENTS_BASE/AMP_HOST_REGISTRY come from the caller's scope by design.
+#
+# AMP_REGISTRY_CA_FILE (optional, caller's scope): path to the PEM file for the CA
+# that signed the registry's TLS certificate, when it isn't publicly trusted
+# (selfsigned/byoc TLS_MODE). Passed via --set-file so the chart can inject it into
+# the build/publish Podman containers' per-registry trust dir — see
+# global.registry.caCert in wso2-amp-platform-resources-extension/values.yaml. Left
+# unset (the default), the registry falls back to its stock CA bundle, which is
+# correct for letsencrypt/letsencrypt-dns (publicly-trusted certs).
+# shellcheck disable=SC2154  # AMP_AGENTS_BASE/AMP_HOST_REGISTRY/AMP_REGISTRY_CA_FILE come from the caller's scope by design.
 build_platform_resources_helm_args() {
   printf '%s\n' \
     "--set" "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token" \
@@ -189,6 +197,9 @@ build_platform_resources_helm_args() {
     "--set" "environment.gateway.http.port=443" \
     "--set" "environment.gateway.https.host=${AMP_AGENTS_BASE}" \
     "--set" "environment.gateway.https.port=443"
+  if [[ -n "${AMP_REGISTRY_CA_FILE:-}" ]]; then
+    printf '%s\n' "--set-file" "global.registry.caCert=${AMP_REGISTRY_CA_FILE}"
+  fi
 }
 
 # build_thunder_helm_args <ip>
